@@ -1,0 +1,404 @@
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+
+using Microsoft.Bot.Builder.Azure;
+using Microsoft.Bot.Builder.Dialogs;
+using Microsoft.Bot.Builder.CognitiveServices.QnAMaker;
+using Microsoft.Bot.Connector;
+using System.Collections.Generic;
+using System.Linq;
+using AdaptiveCards;
+using System.Web.UI.WebControls;
+
+namespace Microsoft.Bot.Sample.QnABot
+{
+    [Serializable]
+    public class RootDialog : QnAMakerDialog
+    {
+        public RootDialog() : base(new QnAMakerService(new QnAMakerAttribute(RootDialog.GetSetting("QnAAuthKey"), Utils.GetAppSetting("QnAKnowledgebaseId"), "Sorry did not find the right answer !! please try by entering alternatives  or  Please contact ITSD  1-800-964-3375   for further assistance.", 0.5, 5, Utils.GetAppSetting("QnAEndpointHostName"))))
+        {
+        }
+        public async Task StartAsync(IDialogContext context)
+        {
+            /* Wait until the first message is received from the conversation and call MessageReceviedAsync 
+            *  to process that message. */
+            context.Wait(this.MessageReceivedAsync);
+        }
+
+        private async Task MessageReceivedAsync(IDialogContext context, IAwaitable<IMessageActivity> result)
+        {
+            /* When MessageReceivedAsync is called, it's passed an IAwaitable<IMessageActivity>. To get the message,
+            *  await the result. */
+            var message = await result;
+
+            var qnaSubscriptionKey = Utils.GetAppSetting("QnASubscriptionKey");
+            var qnaKBId = Utils.GetAppSetting("QnAKnowledgebaseId");
+
+            // QnA Subscription Key and KnowledgeBase Id null verification
+            if (!string.IsNullOrEmpty(qnaSubscriptionKey) && !string.IsNullOrEmpty(qnaKBId))
+            {
+                await context.Forward(new BasicQnAMakerDialog(), AfterAnswerAsync, message, CancellationToken.None);
+            }
+            else
+            {
+                await context.PostAsync("Please set QnAKnowledgebaseId and QnASubscriptionKey in App Settings. Get them at https://qnamaker.ai.");
+            }
+
+        }
+        public static string GetSetting(string key)
+        {
+            var value = Utils.GetAppSetting(key);
+            if (String.IsNullOrEmpty(value) && key == "QnAAuthKey")
+            {
+                value = Utils.GetAppSetting("QnASubscriptionKey"); // QnASubscriptionKey for backward compatibility with QnAMaker (Preview)
+            }
+            return value;
+        }
+        private async Task AfterAnswerAsync(IDialogContext context, IAwaitable<IMessageActivity> result)
+        {
+            // wait for the next user message
+            context.Wait(MessageReceivedAsync);
+        }
+        protected override async Task RespondFromQnAMakerResultAsync(IDialogContext context, IMessageActivity message, QnAMakerResults result)
+        {
+            var answer = result.Answers.First().Answer;
+            Activity reply = ((Activity)context.Activity).CreateReply();
+
+            string[] qnaAnswerData = answer.Split(';');
+            int dataSize = qnaAnswerData.Length;
+            //image and video card
+            if (dataSize > 1 && dataSize <= 6)
+            {
+                var attachment = GetSelectedCard(answer);
+                reply.Attachments.Add(attachment);
+                await context.PostAsync(reply);
+            }
+            else if (answer == "Adaptivecard")
+            {
+                // string reply2 = "Hi";//File.ReadAllText(@".\Adoptive.json");// "Hi";
+                //await context.PostAsync(reply2);
+                var attachment = CreateAdaptiveCardwithEntry();
+                reply.Attachments.Add(attachment);
+                await context.PostAsync(reply);
+
+            }
+
+            else
+            {
+                await context.Forward(new BasicQnAMakerDialog(), AfterAnswerAsync, message, CancellationToken.None);
+                //await context.PostAsync(reply);
+            }
+        }
+
+        private static Attachment GetSelectedCard(string answer)
+        {
+            int len = answer.Split(';').Length;
+            switch (len)
+            {
+                case 2: return GetHeroCard2(answer);
+                case 3: return GetHeroCard3(answer);
+                case 4: return GetHeroCard(answer);
+                case 6: return GetVideoCard(answer);
+                default: return GetHeroCard(answer);
+            }
+        }
+
+
+
+
+
+        private static Attachment GetHeroCard(string answer)
+        {
+            string[] qnaAnswerData = answer.Split(';');
+            string title = qnaAnswerData[0];
+            string description = qnaAnswerData[1];
+            string url = qnaAnswerData[2];
+            string imageURL = qnaAnswerData[3];
+
+            HeroCard card = null;
+
+            {
+                card = new HeroCard
+                {
+                    Title = title,
+                    Subtitle = description,
+                };
+
+
+
+                card.Buttons = new List<CardAction>()
+               {
+
+                      new CardAction()
+                        {
+                            Title = "Learn More",
+                            Type = ActionTypes.OpenUrl,
+                            Value = url
+                        },
+
+
+                        new CardAction(){ Title = "This Resolved my Issue", Type=ActionTypes.ImBack, Value="This Resolved my Issue" },
+                        new CardAction(){ Title = "This did not Resolve my Issue", Type=ActionTypes.ImBack, Value="This did not Resolve my Issue" }
+
+                };
+
+                card.Images = new List<CardImage>
+            {
+                new CardImage( url = imageURL)
+            };
+            }
+            return card.ToAttachment();
+        }
+
+        private static Attachment GetVideoCard(string answer)
+        {
+            string[] qnaAnswerData = answer.Split(';');
+            string title = qnaAnswerData[0];
+            string subtitle = qnaAnswerData[1];
+            string description = qnaAnswerData[2];
+            string thumbimageurl = qnaAnswerData[3];
+            string mediaUrl = qnaAnswerData[4];
+            string url = qnaAnswerData[5];
+
+            VideoCard card = new VideoCard
+            {
+                Title = title,
+                Subtitle = subtitle,
+                Text = description,
+            };
+            card.Image = new ThumbnailUrl
+            {
+                Url = thumbimageurl
+            };
+            card.Media = new List<MediaUrl>
+                    {
+                        new MediaUrl()
+                        {
+                            Url = mediaUrl
+                        }
+                    };
+
+            card.Buttons = new List<CardAction>
+                    {
+                        new CardAction()
+                        {
+                            Title = "Learn More",
+                            Type = ActionTypes.OpenUrl,
+                            Value = url
+                        },
+                       new CardAction(){ Title = "This Resolved my Issue", Type=ActionTypes.ImBack, Value="This Resolved my Issue" },
+                        new CardAction(){ Title = "This did not Resolve my Issue", Type=ActionTypes.ImBack, Value="This did not Resolve my Issue" }
+                    };
+            return card.ToAttachment();
+
+        }
+
+
+        private static Attachment GetHeroCard2(string answer)
+        {
+            string[] qnaAnswerData = answer.Split(';');
+            string title = qnaAnswerData[0];
+            string description = qnaAnswerData[1];
+            ;
+
+            HeroCard card = null;
+
+            {
+                card = new HeroCard
+                {
+                    Title = title,
+                    Subtitle = description,
+                };
+
+
+
+                card.Buttons = new List<CardAction>()
+               {
+
+
+                        new CardAction(){ Title = "Hardware/Settings", Type=ActionTypes.ImBack, Value="Hardware/Settings" },
+                        new CardAction(){ Title = "Till Balancing", Type=ActionTypes.ImBack, Value="Till Balancing" },
+                        new CardAction(){ Title = "Change Funds", Type=ActionTypes.ImBack, Value="Change Funds" },
+                        new CardAction(){ Title = "Self-Check Outs", Type=ActionTypes.ImBack, Value="Self-Check Outs" },
+                        new CardAction(){ Title = "Close / Deposit", Type=ActionTypes.ImBack, Value="Close / Deposit" },
+                        new CardAction(){ Title = "Safe Management", Type=ActionTypes.ImBack, Value="Safe Management" }
+                };
+
+
+            }
+            return card.ToAttachment();
+        }
+
+
+        private static Attachment GetHeroCard3(string answer)
+        {
+            string[] qnaAnswerData = answer.Split(';');
+            string title = qnaAnswerData[0];
+            string description = qnaAnswerData[1];
+            string url = qnaAnswerData[2];
+           
+
+            HeroCard card = null;
+
+            {
+                card = new HeroCard
+                {
+                    Title = title,
+                    Subtitle = description,
+                };
+
+
+
+                card.Buttons = new List<CardAction>()
+               {
+
+                      new CardAction()
+                        {
+                            Title = "Learn More",
+                            Type = ActionTypes.OpenUrl,
+                            Value = url
+                        },
+
+
+                        new CardAction(){ Title = "This Resolved my Issue", Type=ActionTypes.ImBack, Value="This Resolved my Issue" },
+                        new CardAction(){ Title = "This did not Resolve my Issue", Type=ActionTypes.ImBack, Value="This did not Resolve my Issue" }
+
+                };
+
+                
+            }
+            return card.ToAttachment();
+        }
+
+
+        public Attachment CreateAdaptiveCardwithEntry()
+        {
+            var card = new AdaptiveCard()
+            {
+                Body = new List<CardElement>()
+                {  
+                        // Hotels Search form  
+            
+                        new TextBlock() { Text = "Please Enter Your Valid Sales Id" },
+                        new TextInput()
+                        {
+                            Id = "sales id",
+                            Speak = "<s>Sales Id</s>",
+                            Placeholder = "Sales Id",
+                            Style = TextInputStyle.Text
+                        },
+
+                        new TextBlock() { Text = "Please Enter Your First Name" },
+                        new TextInput()
+                        {
+                            Id = "First Name",
+                            Speak = "<s>First Name</s>",
+                            Placeholder = "First Name",
+                            Style = TextInputStyle.Text
+                        },
+
+                        new TextBlock() { Text = "Please Enter Your Last Name" },
+                        new TextInput()
+                        {
+                            Id = "Last Name",
+                            Speak = "<s>Last Name</s>",
+                            Placeholder = "Last Name",
+                            Style = TextInputStyle.Text
+                        },
+                         new TextBlock() { Text = "Please Enter Store ID" },
+                        new TextInput()
+                        {
+                            Id = "Store ID",
+                            Speak = "<s>Store ID</s>",
+                            Placeholder = "Store ID",
+                            Style = TextInputStyle.Text
+                        },
+                        new TextBlock() { Text = "Please Enter Description of the issue" },
+                        new TextInput()
+                        {
+                            Id = "Description",
+                            Speak = "<s>Description</s>",
+                            Placeholder = "Description",
+                            Style = TextInputStyle.Text
+                        }
+
+                       /* new TextBlock() { Text = "When your Free" },
+                        new DateInput()
+                        {
+                            Id = "Free",
+                            Placeholder ="Your free Date"
+                        }, 
+                        new TextBlock() { Text = "Your Experence" },
+                        new NumberInput()
+                        {
+                            Id = "No of Year experence",
+                            Min = 1,
+                            Max = 20,
+                        },
+                        new TextBlock() { Text = "Email" },
+                        new TextInput()
+                        {
+                            Id = "Email",
+                            Speak = "<s>Please Enter Your email</s>",
+                            Placeholder = "Please Enter Your email",
+                            Style = TextInputStyle.Text
+                        },
+                         new TextBlock() { Text = "Phone" },
+                        new TextInput()
+                        {
+                            Id = "Phone",
+                            Speak = "<s>Please Enter Your phone</s>",
+                            Placeholder = "Please Enter Your Phone",
+                            Style = TextInputStyle.Text
+                        },*/
+                },
+                Actions = new List<ActionBase>()
+                {
+                    new SubmitAction()
+                    {
+                        Title = "Submit",
+                        Speak = "<s>Submit</s>",
+
+                    }
+                }
+            };
+            Attachment attachment = new Attachment()
+            {
+                ContentType = AdaptiveCard.ContentType,
+                Content = card
+            };
+            return attachment;
+        }
+
+
+
+
+
+    }
+
+    // Dialog for QnAMaker Preview service
+    [Serializable]
+    public class BasicQnAMakerPreviewDialog : QnAMakerDialog
+    {
+        // Go to https://qnamaker.ai and feed data, train & publish your QnA Knowledgebase.
+        // Parameters to QnAMakerService are:
+        // Required: subscriptionKey, knowledgebaseId, 
+        // Optional: defaultMessage, scoreThreshold[Range 0.0 – 1.0]
+        public BasicQnAMakerPreviewDialog() : base(new QnAMakerService(new QnAMakerAttribute(RootDialog.GetSetting("QnAAuthKey"), Utils.GetAppSetting("QnAKnowledgebaseId"), "Sorry did not find the right answer !! please try by entering alternatives  or  Please contact ITSD  1-800-964-3375   for further assistance", 0.5)))
+        { }
+    }
+
+    // Dialog for QnAMaker GA service
+    [Serializable]
+    public class BasicQnAMakerDialog : QnAMakerDialog
+    {
+        // Go to https://qnamaker.ai and feed data, train & publish your QnA Knowledgebase.
+        // Parameters to QnAMakerService are:
+        // Required: qnaAuthKey, knowledgebaseId, endpointHostName
+        // Optional: defaultMessage, scoreThreshold[Range 0.0 – 1.0]
+        public BasicQnAMakerDialog() : base(new QnAMakerService(new QnAMakerAttribute(RootDialog.GetSetting("QnAAuthKey"), Utils.GetAppSetting("QnAKnowledgebaseId"), "Sorry did not find the right answer !! please try by entering alternatives  or  Please contact ITSD  1-800-964-3375   for further assistance", 0.5, 5, Utils.GetAppSetting("QnAEndpointHostName"))))
+        { }
+
+    }
+}
